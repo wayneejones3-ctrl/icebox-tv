@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; font-family: 'Segoe UI', Arial, sans-serif; }
+    #yt, #vid { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: none; background: #000; }
+    #idle, #msg { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #e8f9ff; }
+    #idle { background: radial-gradient(circle at 50% 40%, #12384a 0%, #050b12 70%); }
+    #idle h1 { font-size: 96px; letter-spacing: 12px; margin: 0; color: #7fe7ff; text-shadow: 0 0 30px #29c6ff; }
+    #idle p { font-size: 34px; opacity: .8; margin-top: 24px; }
+    #msg { background: #0b0b0b; font-size: 40px; padding: 80px; box-sizing: border-box; }
+</style>
+</head>
+<body>
+<div id="yt"></div>
+<video id="vid" playsinline></video>
+<div id="idle"><h1>ICEBOX TV</h1><p>Use your TV remote to cast a YouTube link</p></div>
+<div id="msg"></div>
+<canvas id="test" width="1280" height="720" style="position:absolute;inset:0;width:100%;height:100%;display:none"></canvas>
+
+<script>
+let yt = null, ytReady = false, pending = null, volume = 50, mode = 'off';
+const vid = document.getElementById('vid');
+const show = (id) => ['yt', 'vid', 'idle', 'msg'].forEach(x => document.getElementById(x).style.display = x === id ? (x === 'idle' || x === 'msg' ? 'flex' : 'block') : 'none');
+
+function message(text) { document.getElementById('msg').textContent = text; show('msg'); }
+
+function onYouTubeIframeAPIReady() {
+    ytReady = true;
+    if (pending) { const p = pending; pending = null; load(p); }
+}
+
+function makeYT(id, start, paused) {
+    const opts = {
+        width: '100%', height: '100%', videoId: id,
+        host: 'https://www.youtube-nocookie.com',
+        playerVars: { autoplay: 1, start: Math.floor(start), controls: 0, disablekb: 1, rel: 0, playsinline: 1, iv_load_policy: 3, modestbranding: 1, fs: 0,
+                      enablejsapi: 1, origin: location.origin, widget_referrer: location.href },
+        events: {
+            onReady: (e) => { e.target.unMute(); e.target.setVolume(volume); if (paused) e.target.pauseVideo(); else e.target.playVideo(); },
+            onError: (e) => {
+                const codes = { 2: 'That link is not a valid video.', 5: 'This video cannot play here.', 100: 'Video not found or private.', 101: 'The owner blocked this video from playing outside YouTube. Try another link.', 150: 'The owner blocked this video from playing outside YouTube. Try another link.' };
+                message(codes[e.data] || 'This video could not be played (error ' + e.data + '). Try another link.');
+            },
+        },
+    };
+    if (yt) { try { yt.destroy(); } catch (_) {} }
+    document.getElementById('yt').outerHTML = '<div id="yt"></div>';
+    yt = new YT.Player('yt', opts);
+    const f = document.querySelector('iframe#yt'); if (f) f.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin');
+}
+
+function load(d) {
+    const m = d.media;
+    vid.pause(); vid.removeAttribute('src'); vid.load();
+    if (yt) { try { yt.stopVideo(); } catch (_) {} }
+    if (!m) { mode = d.off ? 'off' : 'idle'; show(mode === 'idle' ? 'idle' : null); return; }
+
+    if (m.kind === 'youtube') {
+        mode = 'yt';
+        if (!ytReady) { pending = d; return; }
+        show('yt');
+        makeYT(m.id, d.time || 0, d.paused);
+    } else {
+        mode = 'vid';
+        show('vid');
+        vid.src = m.url;
+        vid.volume = volume / 100;
+        vid.addEventListener('loadedmetadata', () => { vid.currentTime = d.time || 0; if (!d.paused) vid.play(); }, { once: true });
+        vid.onerror = () => message('That video link could not be played.');
+    }
+}
+
+function sync(d) {
+    if (mode === 'yt' && yt && yt.getCurrentTime) {
+        if (Math.abs(yt.getCurrentTime() - d.time) > 3) yt.seekTo(d.time, true);
+        d.paused ? yt.pauseVideo() : yt.playVideo();
+    } else if (mode === 'vid') {
+        if (Math.abs(vid.currentTime - d.time) > 3) vid.currentTime = d.time;
+        d.paused ? vid.pause() : vid.play();
+    }
+}
+
+window.addEventListener('message', (e) => {
+    let d = e.data;
+    if (typeof d === 'string') { try { d = JSON.parse(d); } catch (_) { return; } }
+    if (!d || !d.type) return;
+    if (d.type === 'load') {
+        if (d.media === undefined || d.media === null) { load({ media: null }); show('idle'); mode = 'idle'; return; }
+        load(d);
+    } else if (d.type === 'sync') sync(d);
+    else if (d.type === 'test') {
+        // moving colour bars over whatever is playing, for 10 seconds
+        const c = document.getElementById('test'), g = c.getContext('2d'), t0 = performance.now();
+        c.style.display = 'block'; c.style.opacity = '0.6';
+        const cols = ['#ff004c', '#ffb800', '#2bff88', '#00c8ff', '#9a4dff', '#ffffff'];
+        const step = (t) => {
+            const k = (t - t0) / 1000;
+            g.clearRect(0, 0, 1280, 720);
+            cols.forEach((col, i) => { g.fillStyle = col; g.fillRect(((i * 213 + k * 200) % 1280), 0, 213, 360); });
+            g.fillStyle = '#fff'; g.font = 'bold 64px sans-serif'; g.fillText('ICEBOX TV TEST ' + k.toFixed(1), 60, 520);
+            g.font = '36px sans-serif'; g.fillText('mode: ' + mode + '   ytState: ' + (yt && yt.getPlayerState ? yt.getPlayerState() : '-'), 60, 600);
+            if (k < 10) requestAnimationFrame(step); else c.style.display = 'none';
+        };
+        requestAnimationFrame(step);
+    }
+    else if (d.type === 'volume') {
+        volume = d.volume;
+        if (yt && yt.setVolume) yt.setVolume(volume);
+        vid.volume = Math.max(0, Math.min(1, volume / 100));
+    }
+});
+</script>
+<script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>
